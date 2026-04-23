@@ -24,7 +24,22 @@ export async function GET(request) {
         },
       }
     )
+
     await supabase.auth.exchangeCodeForSession(code)
+
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('team_name, display_name')
+        .eq('id', user.id)
+        .single()
+
+      if (!profile?.team_name || !profile?.display_name) {
+        return NextResponse.redirect(new URL('/setup', requestUrl.origin))
+      }
+    }
   }
 
   return NextResponse.redirect(new URL('/dashboard', requestUrl.origin))
