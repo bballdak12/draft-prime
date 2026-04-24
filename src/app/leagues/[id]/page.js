@@ -25,11 +25,14 @@ export default function LeaguePage() {
       }
       setCurrentUserId(user.id)
 
+      // Fetch league details
       const { data: leagueData, error: leagueError } = await supabase
         .from('leagues')
         .select('*')
         .eq('id', id)
         .single()
+
+      console.log('[League] leagueData:', leagueData, 'error:', leagueError)
 
       if (leagueError || !leagueData) {
         setError('League not found.')
@@ -38,17 +41,57 @@ export default function LeaguePage() {
       }
       setLeague(leagueData)
 
-      const { data: membersData } = await supabase
+      // Step 1: fetch membership rows for this league
+      // Note: RLS must allow reading all members in leagues you belong to,
+      // not just your own row. Run the SECURITY DEFINER SQL fix if this
+      // returns only 1 row instead of all members.
+      const { data: memberRows, error: memberRowsError } = await supabase
         .from('league_members')
-        .select('user_id, is_commissioner, joined_at, profiles(display_name, team_name)')
+        .select('user_id, is_commissioner, joined_at')
         .eq('league_id', id)
         .order('joined_at')
 
-      if (membersData) {
-        setMembers(membersData)
-        const me = membersData.find(m => m.user_id === user.id)
-        if (me) setIsCommissioner(me.is_commissioner)
+      console.log('[League] memberRows:', memberRows, 'error:', memberRowsError)
+
+      if (memberRowsError) {
+        setError('Could not load members: ' + memberRowsError.message)
+        setLoading(false)
+        return
       }
+
+      if (!memberRows || memberRows.length === 0) {
+        setLoading(false)
+        return
+      }
+
+      // Step 2: fetch profiles for those user IDs separately
+      // (cannot use embedded join — league_members.user_id FK points to
+      //  auth.users, not profiles, so PostgREST can't resolve profiles(...))
+      const userIds = memberRows.map(m => m.user_id)
+      const { data: profileRows, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, display_name, team_name')
+        .in('id', userIds)
+
+      console.log('[League] profileRows:', profileRows, 'error:', profilesError)
+
+      // Build a lookup map so we can merge in O(n)
+      const profileMap = {}
+      profileRows?.forEach(p => { profileMap[p.id] = p })
+
+      const merged = memberRows.map(m => ({
+        user_id: m.user_id,
+        is_commissioner: m.is_commissioner,
+        joined_at: m.joined_at,
+        display_name: profileMap[m.user_id]?.display_name || 'Unknown',
+        team_name: profileMap[m.user_id]?.team_name || '—',
+      }))
+
+      console.log('[League] merged members:', merged)
+      setMembers(merged)
+
+      const me = merged.find(m => m.user_id === user.id)
+      if (me) setIsCommissioner(me.is_commissioner)
 
       setLoading(false)
     }
@@ -115,10 +158,7 @@ export default function LeaguePage() {
           <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-5 mb-6">
             <p className="text-zinc-400 text-sm mb-3">Invite friends to join</p>
             <div className="flex items-center justify-between gap-4">
-              <p
-                className="text-3xl font-bold tracking-widest"
-                style={{ color: '#F0B429' }}
-              >
+              <p className="text-3xl font-bold tracking-widest" style={{ color: '#F0B429' }}>
                 {league.invite_code}
               </p>
               <button
@@ -155,10 +195,8 @@ export default function LeaguePage() {
               className="bg-zinc-900 rounded-xl px-4 py-3 flex items-center justify-between"
             >
               <div>
-                <p className="text-white font-medium">
-                  {member.profiles?.display_name || 'Unknown'}
-                </p>
-                <p className="text-zinc-500 text-sm">{member.profiles?.team_name || '—'}</p>
+                <p className="text-white font-medium">{member.display_name}</p>
+                <p className="text-zinc-500 text-sm">{member.team_name}</p>
               </div>
               <div className="flex items-center gap-2">
                 {member.is_commissioner && (
@@ -176,7 +214,7 @@ export default function LeaguePage() {
             </div>
           ))}
 
-          {/* Empty slots */}
+          {/* Empty slots for remaining spots */}
           {Array.from({ length: 12 - memberCount }).map((_, i) => (
             <div
               key={`empty-${i}`}
