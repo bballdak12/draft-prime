@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '../../lib/supabase'
 
 export default function Login() {
@@ -10,6 +11,7 @@ export default function Login() {
   const [isSignUp, setIsSignUp] = useState(false)
   const [error, setError] = useState(null)
 
+  const router = useRouter()
   const supabase = createClient()
 
   const handleGoogle = async () => {
@@ -41,6 +43,7 @@ export default function Login() {
         password,
       })
       if (error) setError(error.message)
+      else router.push('/')
     }
     setLoading(false)
   }

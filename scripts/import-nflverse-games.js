@@ -13,10 +13,11 @@ const path             = require('path');
 const STATS_URL     = 'https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.csv';
 const SCHEDULES_URL = 'https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv';
 
-const MIN_SEASON = 1999;
-const MAX_SEASON = 2024;
-const BATCH_SIZE = 500;
-const DRY_RUN    = process.argv.includes('--dry-run');
+const MIN_SEASON      = 1999;
+const MAX_SEASON      = 2024;
+const BATCH_SIZE      = 500;
+const DRY_RUN         = process.argv.includes('--dry-run');
+const HEROES_LEGENDS  = process.argv.includes('--heroes-legends');
 
 // nflverse position → our schema position
 const POS_MAP = {
@@ -56,7 +57,7 @@ async function fetchAll(supabase, table, select) {
   const all = [];
   while (true) {
     const { data, error } = await supabase
-      .from(table).select(select).range(from, from + PAGE - 1);
+      .from(table).select(select).order('id').range(from, from + PAGE - 1);
     if (error) throw new Error(`fetchAll(${table}): ${error.message}`);
     all.push(...data);
     if (data.length < PAGE) break;
@@ -141,6 +142,24 @@ async function main() {
   console.log(`  Players loaded    : ${allPlayers.length.toLocaleString()}`);
   console.log(`  Seasons loaded    : ${allSeasons.length.toLocaleString()}`);
 
+  // When --heroes-legends is set, restrict processing to those player names only.
+  // This avoids re-importing the full CSV when we only need to fill gaps for
+  // manually-seeded hero/legend cards.
+  let hlNameFilter = null;
+  if (HEROES_LEGENDS) {
+    const { data: hlPlayers, error: hlErr } = await supabase
+      .from('players').select('name')
+      .in('tier', ['hero', 'legend']).neq('position', 'DST');
+    if (hlErr) throw new Error(`hero/legend query: ${hlErr.message}`);
+    hlNameFilter = new Set(hlPlayers.map(p => p.name));
+    // Add nflverse display-name aliases for hero/legend cards whose DB name differs
+    const HL_ALIASES = { 'Michael Vick': 'Mike Vick', 'Steve Smith Sr.': 'Steve Smith' };
+    for (const [dbName, nfName] of Object.entries(HL_ALIASES)) {
+      if (hlNameFilter.has(dbName)) hlNameFilter.add(nfName);
+    }
+    console.log(`  Hero/legend name filter: ${hlNameFilter.size} names`);
+  }
+
   // "name|position" → ONE canonical player_id.
   // Prefer gold tier so all game rows link to the gold player_seasons entry.
   // Heroes/legends only have one row so they win by default.
@@ -213,13 +232,15 @@ async function main() {
 
   async function flushBatch() {
     if (batch.length === 0) return;
+    // Deduplicate by conflict key — keep last row per (player_season_id, season, week)
+    const deduped = [...new Map(batch.map(r => [`${r.player_season_id}|${r.season}|${r.week}`, r])).values()];
     if (!DRY_RUN) {
       const { error } = await supabase
         .from('player_games')
-        .upsert(batch, { onConflict: 'player_season_id,season,week' });
+        .upsert(deduped, { onConflict: 'player_season_id,season,week' });
       if (error) throw new Error(`Upsert failed: ${error.message}`);
     }
-    inserted += batch.length;
+    inserted += deduped.length;
     batch.length = 0;
   }
 
@@ -250,6 +271,7 @@ async function main() {
 
     // ── Player lookup ──────────────────────────────────────────────────────
     const name     = (r.player_display_name || r.player_name || '').trim();
+    if (hlNameFilter && !hlNameFilter.has(name))       { skipped++; continue; }
     const canonical = nameToId[`${name}|${pos}`];
     if (!canonical)                                    { skipped++; continue; }
     const playerId = canonical.id;

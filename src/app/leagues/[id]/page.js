@@ -14,6 +14,7 @@ export default function LeaguePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [hasAvailablePack, setHasAvailablePack] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -92,6 +93,22 @@ export default function LeaguePage() {
 
       const me = merged.find(m => m.user_id === user.id)
       if (me) setIsCommissioner(me.is_commissioner)
+
+      // Check for an available weekly pack
+      const { data: season } = await supabase
+        .from('app_seasons').select('id')
+        .eq('status', 'active')
+        .order('season_number', { ascending: false }).limit(1).maybeSingle()
+      if (season) {
+        const now = new Date().toISOString()
+        const { data: pendingPack } = await supabase
+          .from('weekly_packs').select('id')
+          .eq('league_id', id).eq('season_id', season.id)
+          .eq('user_id', user.id).eq('status', 'pending')
+          .lte('available_from', now).gte('expires_at', now)
+          .maybeSingle()
+        setHasAvailablePack(!!pendingPack)
+      }
 
       setLoading(false)
     }
@@ -176,13 +193,79 @@ export default function LeaguePage() {
           <div className="mb-6">
             <button
               disabled={memberCount < 2}
+              onClick={() => router.push(`/leagues/${id}/draft`)}
               className="w-full font-bold py-4 rounded-xl text-lg disabled:opacity-40"
               style={{ backgroundColor: '#F0B429', color: '#0A0E1A' }}
             >
-              {memberCount < 2 ? 'Need at least 2 members to start' : 'Start Draft'}
+              {memberCount < 2 ? 'Need at least 2 members to start' : 'Enter Draft Room'}
             </button>
           </div>
         )}
+
+        {/* Non-commissioner: join draft room if it's in progress */}
+        {!isCommissioner && league?.status === 'drafting' && (
+          <div className="mb-6">
+            <button
+              onClick={() => router.push(`/leagues/${id}/draft`)}
+              className="w-full font-bold py-4 rounded-xl text-lg"
+              style={{ backgroundColor: '#F0B429', color: '#0A0E1A' }}
+            >
+              Join Draft Room
+            </button>
+          </div>
+        )}
+
+        {/* Edit Helmet button */}
+        <div style={{ marginBottom: 8 }}>
+          <button
+            onClick={() => router.push(`/leagues/${id}/helmet`)}
+            className="w-full font-bold py-3 rounded-xl text-sm"
+            style={{ backgroundColor: '#0D1220', border: '1px solid #1A2035', color: '#9CA3AF' }}
+          >
+            🏈 Edit Helmet
+          </button>
+        </div>
+
+        {/* Weekly Pack button */}
+        <div style={{ position: 'relative', marginBottom: 12 }}>
+          <button
+            onClick={() => router.push(`/leagues/${id}/pack`)}
+            className="w-full font-bold py-3 rounded-xl text-sm"
+            style={{ backgroundColor: '#0D1220', border: '1px solid #1A2035', color: '#9CA3AF' }}
+          >
+            🎴 Open Weekly Pack
+          </button>
+          {hasAvailablePack && (
+            <span style={{
+              position: 'absolute', top: -7, right: -7,
+              backgroundColor: '#EF4444', color: '#fff',
+              borderRadius: '50%', width: 20, height: 20,
+              fontSize: 11, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              lineHeight: 1, boxShadow: '0 0 8px #EF444488',
+            }}>
+              1
+            </span>
+          )}
+        </div>
+
+        {/* Season nav — Matchup / Standings / My Team */}
+        <div className="flex gap-2 mb-6">
+          {[
+            { label: '📅 Matchup',   path: `/leagues/${id}/matchup` },
+            { label: '🏆 Standings', path: `/leagues/${id}/standings` },
+            { label: '📋 My Roster', path: `/leagues/${id}/team` },
+          ].map(({ label, path }) => (
+            <button
+              key={path}
+              onClick={() => router.push(path)}
+              className="flex-1 py-2 rounded-lg text-xs font-bold"
+              style={{ backgroundColor: '#0D1220', border: '1px solid #1A2035', color: '#9CA3AF' }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         {/* Members list */}
         <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">
