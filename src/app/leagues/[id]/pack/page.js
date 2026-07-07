@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { createClient } from '../../../../lib/supabase'
 import { useParams, useRouter } from 'next/navigation'
 import { buildLineup } from '../../../../lib/scoring/lineup'
+import { logActivityFromClient } from '../../../../lib/activity/logEvent'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const BG   = '#0A0E1A'
@@ -398,7 +399,7 @@ export default function PackPage() {
     }
   }, [selectedCard, draftId, rosterIds, rosterCount])
 
-  const addPlayerToRoster = async (supabase) => {
+  const addPlayerToRoster = async (supabase, droppedPlayerName = null) => {
     const { error: pickErr } = await supabase
       .from('draft_picks')
       .insert({
@@ -421,6 +422,18 @@ export default function PackPage() {
       })
       .eq('id', pack.id)
     if (packErr) throw new Error(`Pack update failed: ${packErr.message}`)
+
+    logActivityFromClient(supabase, {
+      leagueId:  id,
+      seasonId:  pack.season_id,
+      eventType: 'pack_opened',
+      payload: {
+        player_name: selectedCard.name,
+        tier:        selectedCard.tier,
+        ovr:         selectedCard.overall_rating,
+        ...(droppedPlayerName ? { dropped_player_name: droppedPlayerName } : {}),
+      },
+    })
   }
 
   // ── Confirm drop + add ─────────────────────────────────────────────────────
@@ -441,7 +454,7 @@ export default function PackPage() {
         .is('dropped_at', null)
       if (dropErr) throw new Error(`Drop failed: ${dropErr.message}`)
 
-      await addPlayerToRoster(supabase)
+      await addPlayerToRoster(supabase, playerToDrop.name)
       setPhase('success')
     } catch (e) {
       setPickError(e.message)

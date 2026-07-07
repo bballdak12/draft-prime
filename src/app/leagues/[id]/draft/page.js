@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '../../../../lib/supabase'
 import { generatePack } from '../../../../lib/draft/packGenerator'
 import { HelmetSVG } from '../../../../lib/helmet/HelmetSVG'
+import { logActivityFromClient } from '../../../../lib/activity/logEvent'
 
 // Inlined from packGenerator (avoids a Turbopack static-analysis limitation)
 function getDraftRoundInfo(round) {
@@ -1555,6 +1556,11 @@ function ActiveDraftView({ draft, members, user, isCommissioner, chatMessages, o
 
     if (nextPick > totPicks) {
       await supabase.from('drafts').update({ status: 'complete' }).eq('id', d.id)
+      logActivityFromClient(supabase, {
+        leagueId: d.league_id,
+        eventType: 'draft_complete',
+        payload: {},
+      })
     } else {
       const nextRound    = Math.ceil(nextPick / teams)
       const nextPos      = (nextPick - 1) % teams

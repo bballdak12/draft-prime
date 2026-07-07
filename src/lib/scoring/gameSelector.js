@@ -1,6 +1,7 @@
 'use strict'
 
 import { buildSlotMap } from './lineup.js'
+import { logActivity } from '../activity/logEvent.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -292,6 +293,15 @@ export async function calculateMatchupScores(supabase, leagueId, week) {
     return { matchupsProcessed: 0, teamScores, warning: 'No matchups found for this week' }
   }
 
+  // Team names for the activity feed (one lookup for all matchups)
+  const matchupUserIds = [...new Set(matchups.flatMap(m => [m.home_team_user_id, m.away_team_user_id]))]
+  const { data: matchupProfiles } = await supabase
+    .from('profiles')
+    .select('id, team_name, display_name')
+    .in('id', matchupUserIds)
+  const nameMap  = Object.fromEntries((matchupProfiles ?? []).map(p => [p.id, p]))
+  const teamName = uid => nameMap[uid]?.team_name || nameMap[uid]?.display_name || 'Unknown'
+
   // ── C. Update each matchup + standings ───────────────────────────────────
   for (const m of matchups) {
     const homeScore = teamScores[m.home_team_user_id] ?? 0
@@ -313,6 +323,23 @@ export async function calculateMatchupScores(supabase, leagueId, week) {
     for (const side of sides) {
       await upsertStandings(supabase, m.season_id, leagueId, side)
     }
+
+    // Activity feed: system event, no actor (needs service-role client)
+    await logActivity(supabase, {
+      leagueId,
+      seasonId:  m.season_id,
+      eventType: 'matchup_final',
+      payload: {
+        week,
+        home_name:   teamName(m.home_team_user_id),
+        away_name:   teamName(m.away_team_user_id),
+        home_score:  homeScore,
+        away_score:  awayScore,
+        winner_name: homeScore > awayScore ? teamName(m.home_team_user_id)
+                   : awayScore > homeScore ? teamName(m.away_team_user_id)
+                   : null,
+      },
+    })
   }
 
   return { matchupsProcessed: matchups.length, teamScores }

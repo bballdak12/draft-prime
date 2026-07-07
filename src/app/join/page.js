@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { createClient } from '../../lib/supabase'
 import { useRouter } from 'next/navigation'
+import { logActivityFromClient } from '../../lib/activity/logEvent'
 
 export default function JoinLeague() {
   const [inviteCode, setInviteCode] = useState('')
@@ -56,6 +57,18 @@ export default function JoinLeague() {
       setJoining(false)
       return
     }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('team_name, display_name')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    logActivityFromClient(supabase, {
+      leagueId:  found.id,
+      eventType: 'member_joined',
+      payload:   { team_name: profile?.team_name || profile?.display_name || 'A new team' },
+    })
 
     router.push(`/leagues/${found.id}`)
   }
