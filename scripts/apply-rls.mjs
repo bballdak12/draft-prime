@@ -48,8 +48,8 @@ for (const stmt of statements) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // sb_secret keys are not JWTs — send via apikey only, never Bearer
           'apikey': SERVICE_ROLE_KEY,
-          'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify({ sql: stmt + ';' }),
       })
