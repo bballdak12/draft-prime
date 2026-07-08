@@ -18,13 +18,18 @@ const TIER_COLOR = {
 }
 
 const EVENT_ICON = {
-  member_joined:  '👋',
-  draft_complete: '🏁',
-  trade_accepted: '🔄',
-  pack_opened:    '🎴',
-  player_dropped: '📤',
-  matchup_final:  '🏆',
-  announcement:   '📣',
+  member_joined:          '👋',
+  draft_complete:         '🏁',
+  trade_accepted:         '🔄',
+  pack_opened:            '🎴',
+  player_dropped:         '📤',
+  matchup_final:          '🏆',
+  announcement:           '📣',
+  member_removed:         '🚪',
+  trade_cancelled:        '🚫',
+  week_reset:             '♻️',
+  pack_deadline_extended: '⏰',
+  lineup_lock:            '🔒',
 }
 
 const PAGE_SIZE = 25
@@ -116,6 +121,28 @@ function ActivityItem({ event, nameFor }) {
       sentence = <>{p.text ?? p.message ?? 'League announcement'}</>
       break
 
+    case 'member_removed':
+      sentence = <><B>{p.team_name}</B> was removed from the league</>
+      break
+
+    case 'trade_cancelled':
+      sentence = <>The commissioner cancelled a trade between <B>{p.proposer_name}</B> and <B>{p.receiver_name}</B></>
+      break
+
+    case 'week_reset':
+      sentence = <>Week {p.week} was reset by the commissioner</>
+      break
+
+    case 'pack_deadline_extended':
+      sentence = <>Pack deadline extended by {p.hours ?? 24} hours</>
+      break
+
+    case 'lineup_lock':
+      sentence = p.locked
+        ? <>Lineups were locked by the commissioner</>
+        : <>Lineups were unlocked by the commissioner</>
+      break
+
     default:
       sentence = <>League event</>
   }
@@ -196,6 +223,7 @@ export default function LeaguePage() {
   const [pendingTrades,  setPendingTrades]  = useState(0)
   const [copied,         setCopied]         = useState(false)
   const [membersOpen,    setMembersOpen]    = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(true)  // resolved from localStorage after load
 
   const [events,         setEvents]         = useState([])
   const [hasMore,        setHasMore]        = useState(false)
@@ -218,6 +246,11 @@ export default function LeaguePage() {
         return
       }
       setLeague(leagueData)
+
+      // Announcement banner: dismissal is per-announcement (keyed on its timestamp)
+      if (leagueData.announcement) {
+        setBannerDismissed(localStorage.getItem(`dp-ann-${id}`) === leagueData.announcement_updated_at)
+      }
 
       // Members + profiles (separate queries — league_members.user_id FK
       // points to auth.users, so PostgREST can't embed profiles)
@@ -421,6 +454,34 @@ export default function LeaguePage() {
           </p>
         </div>
 
+        {/* ── Commissioner announcement banner ───────────────────────────── */}
+        {league.announcement && !bannerDismissed && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            backgroundColor: `${GOLD}14`, border: `1px solid ${GOLD}66`,
+            borderLeft: `3px solid ${GOLD}`,
+            borderRadius: 12, padding: '11px 12px', marginBottom: 16,
+          }}>
+            <span style={{ fontSize: 15, lineHeight: '19px' }}>📣</span>
+            <p style={{ flex: 1, margin: 0, fontSize: 13, color: '#F9FAFB', lineHeight: 1.5 }}>
+              {league.announcement}
+            </p>
+            <button
+              onClick={() => {
+                localStorage.setItem(`dp-ann-${id}`, league.announcement_updated_at)
+                setBannerDismissed(true)
+              }}
+              aria-label="Dismiss announcement"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: '#6B7280', fontSize: 14, padding: 0, lineHeight: '19px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* ── Matchup summary card ───────────────────────────────────────── */}
         {matchup && opp && (
           <div
@@ -546,6 +607,9 @@ export default function LeaguePage() {
           <NavTile icon="🔄" label="Trades"      badge={pendingTrades} onClick={() => router.push(`/leagues/${id}/trades`)} />
           <NavTile icon="🎴" label="Weekly Pack" badge={hasAvailablePack ? 1 : 0} onClick={() => router.push(`/leagues/${id}/pack`)} />
           <NavTile icon="🏈" label="Edit Helmet" onClick={() => router.push(`/leagues/${id}/helmet`)} />
+          {isCommissioner && (
+            <NavTile icon="🛠️" label="Commish" onClick={() => router.push(`/leagues/${id}/commissioner`)} />
+          )}
         </div>
 
         {/* ── Activity feed ──────────────────────────────────────────────── */}
