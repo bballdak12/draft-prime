@@ -7,10 +7,17 @@ import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 
+// Credentials come from .env.local — never hardcode keys in scripts.
+const __env = (await import('fs')).readFileSync(new URL('../.env.local', import.meta.url), 'utf8')
+const __SUPABASE_URL     = __env.match(/NEXT_PUBLIC_SUPABASE_URL=(.+)/)[1].trim()
+const __SERVICE_ROLE_KEY = __env.match(/SUPABASE_SERVICE_ROLE_KEY=(.+)/)[1].trim()
+const __ANON_KEY         = __env.match(/NEXT_PUBLIC_SUPABASE_ANON_KEY=(.+)/)[1].trim()
+
+
 const __dir = dirname(fileURLToPath(import.meta.url))
 
-const SUPABASE_URL     = 'https://hihbgpkjrzffdzuiqzcp.supabase.co'
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpaGJncGtqcnpmZmR6dWlxemNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjczNzEwNywiZXhwIjoyMDkyMzEzMTA3fQ.P_juXzfqA0JaHxatEE82rpmJ75Gy-yi82gYgoCKCrDI'
+const SUPABASE_URL     = __SUPABASE_URL
+const SERVICE_ROLE_KEY = __SERVICE_ROLE_KEY
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   db: { schema: 'public' },

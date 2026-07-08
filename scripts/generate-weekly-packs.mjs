@@ -13,9 +13,16 @@
 import { createClient } from '@supabase/supabase-js'
 import { generatePack }  from '../src/lib/draft/packGenerator.js'
 
+// Credentials come from .env.local — never hardcode keys in scripts.
+const __env = (await import('fs')).readFileSync(new URL('../.env.local', import.meta.url), 'utf8')
+const __SUPABASE_URL     = __env.match(/NEXT_PUBLIC_SUPABASE_URL=(.+)/)[1].trim()
+const __SERVICE_ROLE_KEY = __env.match(/SUPABASE_SERVICE_ROLE_KEY=(.+)/)[1].trim()
+const __ANON_KEY         = __env.match(/NEXT_PUBLIC_SUPABASE_ANON_KEY=(.+)/)[1].trim()
+
+
 // ── Supabase client (service role bypasses RLS) ───────────────────────────────
-const SUPABASE_URL     = 'https://hihbgpkjrzffdzuiqzcp.supabase.co'
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpaGJncGtqcnpmZmR6dWlxemNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjczNzEwNywiZXhwIjoyMDkyMzEzMTA3fQ.P_juXzfqA0JaHxatEE82rpmJ75Gy-yi82gYgoCKCrDI'
+const SUPABASE_URL     = __SUPABASE_URL
+const SERVICE_ROLE_KEY = __SERVICE_ROLE_KEY
 const LEAGUE_ID        = 'a6e06087-1705-4658-b6a3-dee499a35f0a'
 
 const TEST_MODE = process.argv.includes('--test')
