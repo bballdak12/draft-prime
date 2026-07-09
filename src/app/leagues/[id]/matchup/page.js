@@ -140,6 +140,18 @@ function StatModal({ row, onClose }) {
           {!lines.length && <p style={{ fontSize: 12, color: '#374151', margin: 0 }}>No stat breakdown available.</p>}
         </div>
 
+        {/* AI game recap */}
+        {row.game_blurb && (
+          <p style={{
+            marginTop: 14, paddingTop: 12, borderTop: '1px solid #141E35',
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontStyle: 'italic', fontSize: 13, lineHeight: 1.55,
+            color: '#B8BEC9',
+          }}>
+            {row.game_blurb}
+          </p>
+        )}
+
         {/* Score */}
         <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #141E35', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 10, color: '#374151', letterSpacing: '0.1em', fontFamily: 'var(--font-barlow, sans-serif)' }}>HALF PPR</span>
@@ -373,7 +385,7 @@ export default function MatchupPage() {
       // player_games only resolves cleanly in a direct table select.
       const { data: allScores, error: se } = await supabase
         .from('weekly_player_scores')
-        .select('user_id, slot, score, is_starter, game_revealed, player_id, game_id, players(name, position, tier, overall_rating)')
+        .select('user_id, slot, score, is_starter, game_revealed, player_id, game_id, game_blurb, players(name, position, tier, overall_rating)')
         .eq('league_id', id)
         .eq('season_id', season.id)
         .eq('week', season.current_week)
