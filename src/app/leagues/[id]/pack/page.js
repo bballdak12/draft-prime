@@ -5,6 +5,7 @@ import { createClient } from '../../../../lib/supabase'
 import { useParams, useRouter } from 'next/navigation'
 import { buildLineup } from '../../../../lib/scoring/lineup'
 import { logActivityFromClient } from '../../../../lib/activity/logEvent'
+import { requestBadgeAward } from '../../../../lib/badges/badgeQueue'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const BG   = '#0A0E1A'
@@ -434,6 +435,13 @@ export default function PackPage() {
         ...(droppedPlayerName ? { dropped_player_name: droppedPlayerName } : {}),
       },
     })
+
+    // Legend Puller badge — validated server-side against the opened pack
+    if (selectedCard.tier === 'legend') {
+      requestBadgeAward(supabase, {
+        type: 'legend_puller', leagueId: id, seasonId: pack.season_id, packId: pack.id,
+      })
+    }
   }
 
   // ── Confirm drop + add ─────────────────────────────────────────────────────

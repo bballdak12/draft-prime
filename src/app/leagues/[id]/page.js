@@ -30,6 +30,7 @@ const EVENT_ICON = {
   week_reset:             '♻️',
   pack_deadline_extended: '⏰',
   lineup_lock:            '🔒',
+  badge_earned:           '🎖️',
 }
 
 const PAGE_SIZE = 25
@@ -141,6 +142,12 @@ function ActivityItem({ event, nameFor }) {
       sentence = p.locked
         ? <>Lineups were locked by the commissioner</>
         : <>Lineups were unlocked by the commissioner</>
+      break
+
+    case 'badge_earned':
+      sentence = p.leveled_up
+        ? <><B>{actor}</B> leveled up the {p.icon} <B color={GOLD}>{p.badge_name}</B> badge to {p.level}</>
+        : <><B>{actor}</B> earned the {p.icon} <B color={GOLD}>{p.badge_name}</B> badge</>
       break
 
     default:
@@ -607,6 +614,7 @@ export default function LeaguePage() {
           <NavTile icon="🔄" label="Trades"      badge={pendingTrades} onClick={() => router.push(`/leagues/${id}/trades`)} />
           <NavTile icon="🎴" label="Weekly Pack" badge={hasAvailablePack ? 1 : 0} onClick={() => router.push(`/leagues/${id}/pack`)} />
           <NavTile icon="🏈" label="Edit Helmet" onClick={() => router.push(`/leagues/${id}/helmet`)} />
+          <NavTile icon="🎖️" label="My Profile" onClick={() => router.push('/profile')} />
           {isCommissioner && (
             <NavTile icon="🛠️" label="Commish" onClick={() => router.push(`/leagues/${id}/commissioner`)} />
           )}
@@ -671,9 +679,11 @@ export default function LeaguePage() {
               return (
                 <div
                   key={member.user_id}
+                  onClick={() => router.push(`/profile/${member.user_id}?league=${id}`)}
                   style={{
                     backgroundColor: CARD, border: `1px solid ${BORDER}`, borderRadius: 12,
                     padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12,
+                    cursor: 'pointer',
                   }}
                 >
                   <HelmetSVG
@@ -707,6 +717,7 @@ export default function LeaguePage() {
                     <span style={{ fontSize: 13, fontWeight: 800, color: '#9CA3AF', fontFamily: F }}>
                       {rec ? `${rec.wins}–${rec.losses}` : '0–0'}
                     </span>
+                    <span style={{ color: '#374151', fontSize: 14 }}>›</span>
                   </div>
                 </div>
               )

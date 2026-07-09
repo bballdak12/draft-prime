@@ -9,6 +9,9 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { logActivity } from '../../../../lib/activity/logEvent'
+import { awardBadge } from '../../../../lib/badges/awardBadge'
+
+const DEAL_MAKER_THRESHOLD = 5
 
 const SUPABASE_URL     = process.env.NEXT_PUBLIC_SUPABASE_URL
 const ANON_KEY         = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -137,6 +140,21 @@ export async function POST(request) {
         got:  trade.receiver_players.map(pid => playerName[pid]).filter(Boolean),
       },
     })
+
+    // ── 7. Deal Maker badge — award each party once they've completed 5 trades ─
+    for (const uid of [trade.proposer_user_id, trade.receiver_user_id]) {
+      const { count } = await admin
+        .from('trades')
+        .select('id', { count: 'exact', head: true })
+        .eq('league_id', trade.league_id)
+        .eq('status', 'accepted')
+        .or(`proposer_user_id.eq.${uid},receiver_user_id.eq.${uid}`)
+      if ((count ?? 0) >= DEAL_MAKER_THRESHOLD) {
+        await awardBadge(admin, {
+          userId: uid, badgeId: 'deal_maker', leagueId: trade.league_id, seasonId: trade.season_id,
+        })
+      }
+    }
 
     return NextResponse.json({ success: true, tradeId })
   } catch (err) {

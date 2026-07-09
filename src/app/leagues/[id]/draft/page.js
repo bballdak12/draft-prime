@@ -6,6 +6,7 @@ import { createClient } from '../../../../lib/supabase'
 import { generatePack } from '../../../../lib/draft/packGenerator'
 import { HelmetSVG } from '../../../../lib/helmet/HelmetSVG'
 import { logActivityFromClient } from '../../../../lib/activity/logEvent'
+import { requestBadgeAward } from '../../../../lib/badges/badgeQueue'
 
 // Inlined from packGenerator (avoids a Turbopack static-analysis limitation)
 function getDraftRoundInfo(round) {
@@ -1561,6 +1562,8 @@ function ActiveDraftView({ draft, members, user, isCommissioner, chatMessages, o
         eventType: 'draft_complete',
         payload: {},
       })
+      // Draft Genius badge — server recomputes grades and awards the top team
+      requestBadgeAward(supabase, { type: 'best_draft_grade', leagueId: d.league_id })
     } else {
       const nextRound    = Math.ceil(nextPick / teams)
       const nextPos      = (nextPick - 1) % teams
