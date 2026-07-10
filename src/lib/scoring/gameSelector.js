@@ -11,12 +11,70 @@ function round2(n) {
   return Math.round((n || 0) * 100) / 100
 }
 
+// PostgREST caps every response at 1000 rows and reports no error when it
+// truncates. player_games alone has ~70k rows, and a 12-team roster's prime
+// seasons pull well over 1000 of them, so any unbounded select here silently
+// loses data — players end up with empty game pools and their starters are
+// dropped from the lineup. Every multi-row read below must page.
+const PAGE_SIZE = 1000
+
+// Cap on how many ids go into a single .in(...) so the request URL stays sane.
+const IN_CHUNK  = 100
+
+/**
+ * Drain a query to completion, `PAGE_SIZE` rows at a time.
+ * `makeQuery()` must return a fresh builder on every call — builders are
+ * single-use once awaited.
+ */
+async function fetchAllRows(makeQuery, label) {
+  const rows = []
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await makeQuery().range(offset, offset + PAGE_SIZE - 1)
+    if (error) throw new Error(`${label} failed: ${error.message}`)
+    rows.push(...(data ?? []))
+    if (!data || data.length < PAGE_SIZE) return rows
+  }
+}
+
+/**
+ * Drain a query filtered by `.in(column, values)`, chunking the id list and
+ * paging each chunk.
+ */
+async function fetchAllIn(makeQuery, column, values, label) {
+  const rows = []
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const chunk = values.slice(i, i + IN_CHUNK)
+    rows.push(...await fetchAllRows(() => makeQuery().in(column, chunk), label))
+  }
+  return rows
+}
+
 /**
  * Pick a random element from an array.  Returns undefined if empty.
  */
 function pickRandom(arr) {
   if (!arr.length) return undefined
   return arr[Math.floor(Math.random() * arr.length)]
+}
+
+/**
+ * Weighted random draw.  `weightFn` returns a non-negative weight per element;
+ * an element with weight 3 is three times as likely to be drawn as weight 1.
+ * Falls back to a uniform draw when every weight is zero.
+ */
+function pickWeighted(arr, weightFn) {
+  if (!arr.length) return undefined
+
+  const weights = arr.map(el => Math.max(0, weightFn(el)))
+  const total   = weights.reduce((a, b) => a + b, 0)
+  if (total <= 0) return pickRandom(arr)
+
+  let roll = Math.random() * total
+  for (let i = 0; i < arr.length; i++) {
+    roll -= weights[i]
+    if (roll < 0) return arr[i]
+  }
+  return arr[arr.length - 1]   // guards against float drift
 }
 
 // ---------------------------------------------------------------------------
@@ -41,9 +99,25 @@ function pickRandom(arr) {
  * @param {string}  leagueId
  * @param {number}  week       1-based week number
  * @param {string}  seasonId   UUID of the active app_season
+ * @param {object}  [options]
+ * @param {number}  [options.playoffBoost=1.1]   Multiplier for historical playoff
+ *                    games. Fantasy playoff weeks pass 1.2 (+20 %).
+ * @param {number}  [options.playoffWeight=1]    Draw weight for historical playoff
+ *                    games relative to regular-season games. > 1 makes them more
+ *                    likely to be selected — used during fantasy playoff weeks.
+ * @param {string[]|null} [options.onlyUserIds=null]  Restrict scoring to these
+ *                    teams. Playoff weeks pass only the teams that actually have
+ *                    a matchup, so bye teams don't burn games from their pool.
  * @returns {{ count, teamsProcessed, skipped, sample }}
  */
-export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
+export async function selectWeeklyGames(supabase, leagueId, week, seasonId, options = {}) {
+  const {
+    playoffBoost  = 1.1,
+    playoffWeight = 1,
+    onlyUserIds   = null,
+  } = options
+
+  const userFilter = onlyUserIds ? new Set(onlyUserIds) : null
   // ── 1. Find the most-recent COMPLETE draft for this league ──────────────
   const { data: draft, error: draftErr } = await supabase
     .from('drafts')
@@ -69,26 +143,25 @@ export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
   const playerIds = [...new Set(picks.map(p => p.player_id))]
 
   // ── 3. Load player master data (need prime_seasons_count + position) ────
-  const { data: players, error: playerErr } = await supabase
-    .from('players')
-    .select('id, name, position, tier, overall_rating, prime_seasons_count')
-    .in('id', playerIds)
+  const players = await fetchAllIn(
+    () => supabase.from('players').select('id, name, position, tier, overall_rating, prime_seasons_count'),
+    'id', playerIds, 'Player lookup',
+  )
 
-  if (playerErr)        throw new Error(`Player lookup failed: ${playerErr.message}`)
-  if (!players?.length) throw new Error('No player data found')
+  if (!players.length) throw new Error('No player data found')
 
   const playerMap = Object.fromEntries(players.map(p => [p.id, p]))
 
   // ── 4. Load all prime seasons for these players ──────────────────────────
   // is_eligible = true on player_seasons means the season has game data loaded
   // AND season_rank <= prime_seasons_count guards the prime-season boundary
-  const { data: allSeasons, error: seasonsErr } = await supabase
-    .from('player_seasons')
-    .select('id, player_id, season_year, season_rank, fppg, is_eligible')
-    .in('player_id', playerIds)
-    .eq('is_eligible', true)
-
-  if (seasonsErr) throw new Error(`Seasons lookup failed: ${seasonsErr.message}`)
+  const allSeasons = await fetchAllIn(
+    () => supabase
+      .from('player_seasons')
+      .select('id, player_id, season_year, season_rank, fppg, is_eligible')
+      .eq('is_eligible', true),
+    'player_id', playerIds, 'Seasons lookup',
+  )
 
   // Build map: player_id → [season_id, …] (prime seasons with data only)
   const playerPrimeSeasonIds = {}
@@ -107,13 +180,14 @@ export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
   // ── 5. Load eligible games across all prime seasons ──────────────────────
   // Real column names: player_season_id (FK), half_ppr_adjusted, half_ppr_raw
   // injury_flag = true means the player was injured — exclude those games
-  const { data: allGames, error: gamesErr } = await supabase
-    .from('player_games')
-    .select('id, player_id, player_season_id, season, week, opponent, is_playoff, half_ppr_adjusted, half_ppr_raw')
-    .in('player_season_id', allPrimeSeasonIds)
-    .eq('injury_flag', false)
-
-  if (gamesErr) throw new Error(`Games lookup failed: ${gamesErr.message}`)
+  const allGames = await fetchAllIn(
+    () => supabase
+      .from('player_games')
+      .select('id, player_id, player_season_id, season, week, opponent, is_playoff, half_ppr_adjusted, half_ppr_raw')
+      .eq('injury_flag', false)
+      .order('id', { ascending: true }),
+    'player_season_id', allPrimeSeasonIds, 'Games lookup',
+  )
 
   // Build game pool: player_id → [game, …]
   const gamePool = {}
@@ -126,15 +200,19 @@ export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
   const seasonYearMap = Object.fromEntries((allSeasons || []).map(s => [s.id, s.season_year]))
 
   // ── 6. Load games already used in this season (for exclusion) ───────────
-  const { data: usedRows, error: usedErr } = await supabase
-    .from('weekly_player_scores')
-    .select('player_id, game_id')
-    .eq('season_id', seasonId)
-    .eq('league_id', leagueId)
+  // A full 17-week 12-team season writes ~1800 of these rows, so this must page
+  // too — a truncated read would let already-used games be drawn again.
+  const usedRows = await fetchAllRows(
+    () => supabase
+      .from('weekly_player_scores')
+      .select('player_id, game_id')
+      .eq('season_id', seasonId)
+      .eq('league_id', leagueId)
+      .order('id', { ascending: true }),
+    'Used-games lookup',
+  )
 
-  if (usedErr) throw new Error(`Used-games lookup failed: ${usedErr.message}`)
-
-  const usedGameKeys = new Set((usedRows || []).map(r => `${r.player_id}:${r.game_id}`))
+  const usedGameKeys = new Set(usedRows.map(r => `${r.player_id}:${r.game_id}`))
 
   // ── 7. Check for already-scored rows this week (idempotency guard) ───────
   const { data: existingThisWeek } = await supabase
@@ -153,8 +231,13 @@ export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
   // Group picks by team
   const teamPicks = {}
   for (const pick of picks) {
+    if (userFilter && !userFilter.has(pick.team_user_id)) continue
     if (!teamPicks[pick.team_user_id]) teamPicks[pick.team_user_id] = []
     teamPicks[pick.team_user_id].push(pick)
+  }
+
+  if (!Object.keys(teamPicks).length) {
+    throw new Error('No teams to score — check onlyUserIds against this draft\'s picks')
   }
 
   const scoresToInsert = []
@@ -183,10 +266,12 @@ export async function selectWeeklyGames(supabase, leagueId, week, seasonId) {
       const available = pool.filter(g => !usedGameKeys.has(`${playerId}:${g.id}`))
       const drawPool  = available.length > 0 ? available : pool
 
-      const game      = pickRandom(drawPool)
+      // During fantasy playoff weeks, historical playoff games are drawn more
+      // often (playoffWeight) and score higher (playoffBoost).
+      const game      = pickWeighted(drawPool, g => (g.is_playoff ? playoffWeight : 1))
       // Real column names: half_ppr_adjusted / half_ppr_raw
       const baseScore = game.half_ppr_adjusted ?? game.half_ppr_raw ?? 0
-      const score     = round2(game.is_playoff ? baseScore * 1.1 : baseScore)
+      const score     = round2(game.is_playoff ? baseScore * playoffBoost : baseScore)
 
       const slotInfo  = slotMap[playerId] ?? {
         isStarter: false,

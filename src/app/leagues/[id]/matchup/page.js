@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { createClient } from '../../../../lib/supabase'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TIER_COLOR = {
@@ -326,7 +326,26 @@ function TeamColumn({ teamName, record, score, rows, isMe, isWinner, isFinal, is
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
+// useSearchParams forces a client-side render up to the nearest Suspense
+// boundary, and a production build of a static page fails without one.
 export default function MatchupPage() {
+  return (
+    <Suspense fallback={<CenteredSpinner />}>
+      <MatchupView />
+    </Suspense>
+  )
+}
+
+function CenteredSpinner() {
+  return (
+    <main style={{ backgroundColor: BG, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid #1A2035', borderTopColor: GOLD, animation: 'spin 0.8s linear infinite' }} />
+    </main>
+  )
+}
+
+function MatchupView() {
   const { id }   = useParams()
   const router   = useRouter()
 
@@ -343,6 +362,12 @@ export default function MatchupPage() {
   const [oppRecord,      setOppRecord]      = useState({ wins: 0, losses: 0 })
   const [selectedRow,    setSelectedRow]    = useState(null)
   const [currentWeek,    setCurrentWeek]    = useState(1)
+  // The team shown in the left column. Normally the viewer; when viewing a
+  // playoff matchup they aren't in, the high seed takes the left column.
+  const [viewUserId,     setViewUserId]     = useState(null)
+
+  const searchParams   = useSearchParams()
+  const playoffMatchId = searchParams.get('pm')
 
   useEffect(() => {
     const load = async () => {
@@ -361,24 +386,57 @@ export default function MatchupPage() {
         .from('app_seasons').select('id, current_week').eq('status', 'active')
         .order('season_number', { ascending: false }).limit(1).maybeSingle()
       if (!season) { setError('No active season'); setLoading(false); return }
-      setCurrentWeek(season.current_week)
 
-      // Find matchup for this user in current week
-      // User may be home or away
-      const { data: matchups } = await supabase
-        .from('weekly_matchups')
-        .select('id, week, home_team_user_id, away_team_user_id, home_score, away_score, status')
-        .eq('league_id', id)
-        .eq('season_id', season.id)
-        .eq('week', season.current_week)
-        .or(`home_team_user_id.eq.${user.id},away_team_user_id.eq.${user.id}`)
-        .limit(1)
+      // A `pm` query param means "show this playoff matchup" — the bracket page
+      // links here. Playoff matchups are normalized to the home/away shape the
+      // rest of this page renders: high seed is home, low seed is away.
+      let m
+      if (playoffMatchId) {
+        const { data: pm } = await supabase
+          .from('playoff_matchups')
+          .select('id, week, high_seed_user_id, low_seed_user_id, high_score, low_score, status')
+          .eq('id', playoffMatchId)
+          .eq('league_id', id)
+          .maybeSingle()
 
-      const m = matchups?.[0]
-      if (!m) { setError(`No matchup found for week ${season.current_week}`); setLoading(false); return }
+        if (!pm)                       { setError('Playoff matchup not found');   setLoading(false); return }
+        if (!pm.high_seed_user_id || !pm.low_seed_user_id) {
+          setError('That playoff matchup has no opponent yet'); setLoading(false); return
+        }
+
+        m = {
+          id:                pm.id,
+          week:              pm.week,
+          home_team_user_id: pm.high_seed_user_id,
+          away_team_user_id: pm.low_seed_user_id,
+          home_score:        pm.high_score,
+          away_score:        pm.low_score,
+          status:            pm.status,
+        }
+      } else {
+        const { data: matchups } = await supabase
+          .from('weekly_matchups')
+          .select('id, week, home_team_user_id, away_team_user_id, home_score, away_score, status')
+          .eq('league_id', id)
+          .eq('season_id', season.id)
+          .eq('week', season.current_week)
+          .or(`home_team_user_id.eq.${user.id},away_team_user_id.eq.${user.id}`)
+          .limit(1)
+
+        m = matchups?.[0]
+        if (!m) { setError(`No matchup found for week ${season.current_week}`); setLoading(false); return }
+      }
+
       setMatchup(m)
+      setCurrentWeek(m.week)
 
-      const oppId = m.home_team_user_id === user.id ? m.away_team_user_id : m.home_team_user_id
+      // The viewer takes the left column when they're playing; otherwise the
+      // home (high) seed does, so a spectator still sees a coherent matchup.
+      const isParticipant = m.home_team_user_id === user.id || m.away_team_user_id === user.id
+      const viewId        = isParticipant ? user.id : m.home_team_user_id
+      setViewUserId(viewId)
+
+      const oppId = m.home_team_user_id === viewId ? m.away_team_user_id : m.home_team_user_id
 
       // Load starter scores + player data.  Fetch player_games separately to
       // avoid PostgREST FK-embed RLS issues — the authenticated-role policy on
@@ -388,8 +446,8 @@ export default function MatchupPage() {
         .select('user_id, slot, score, is_starter, game_revealed, player_id, game_id, game_blurb, players(name, position, tier, overall_rating)')
         .eq('league_id', id)
         .eq('season_id', season.id)
-        .eq('week', season.current_week)
-        .in('user_id', [user.id, oppId])
+        .eq('week', m.week)
+        .in('user_id', [viewId, oppId])
         .eq('is_starter', true)
 
       if (se) { setError(`Failed to load scores: ${se.message}`); setLoading(false); return }
@@ -411,30 +469,30 @@ export default function MatchupPage() {
         player_games: r.game_id ? (gameMap[r.game_id] ?? null) : null,
       }))
 
-      setMyRows(enriched.filter(r => r.user_id === user.id))
+      setMyRows(enriched.filter(r => r.user_id === viewId))
       setOppRows(enriched.filter(r => r.user_id === oppId))
 
       // Profiles
       const { data: profiles } = await supabase
         .from('profiles').select('id, team_name, display_name')
-        .in('id', [user.id, oppId])
+        .in('id', [viewId, oppId])
       const pMap = Object.fromEntries((profiles ?? []).map(p => [p.id, p]))
-      setMyProfile(pMap[user.id])
+      setMyProfile(pMap[viewId])
       setOppProfile(pMap[oppId])
 
       // Standings (for records)
       const { data: standings } = await supabase
         .from('league_standings').select('user_id, wins, losses')
         .eq('league_id', id).eq('season_id', season.id)
-        .in('user_id', [user.id, oppId])
+        .in('user_id', [viewId, oppId])
       const sMap = Object.fromEntries((standings ?? []).map(s => [s.user_id, s]))
-      setMyRecord(sMap[user.id] ?? { wins: 0, losses: 0 })
+      setMyRecord(sMap[viewId] ?? { wins: 0, losses: 0 })
       setOppRecord(sMap[oppId] ?? { wins: 0, losses: 0 })
 
       setLoading(false)
     }
     load()
-  }, [id])
+  }, [id, playoffMatchId])
 
   if (loading) return (
     <main style={{ backgroundColor: BG, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -452,8 +510,9 @@ export default function MatchupPage() {
 
   const isFinal   = matchup?.status === 'complete'
   const isScoring = matchup?.status === 'scoring'
-  const myScore   = currentUserId === matchup?.home_team_user_id ? matchup?.home_score : matchup?.away_score
-  const oppScore  = currentUserId === matchup?.home_team_user_id ? matchup?.away_score : matchup?.home_score
+  const viewIsHome = viewUserId === matchup?.home_team_user_id
+  const myScore   = viewIsHome ? matchup?.home_score : matchup?.away_score
+  const oppScore  = viewIsHome ? matchup?.away_score : matchup?.home_score
   const iAmWinner = isFinal && (myScore ?? 0) > (oppScore ?? 0)
   const oppWinner = isFinal && (oppScore ?? 0) > (myScore ?? 0)
 
@@ -516,7 +575,9 @@ export default function MatchupPage() {
             record={`${myRecord.wins}–${myRecord.losses}`}
             score={myScore ?? 0}
             rows={myRows}
-            isMe={true}
+            // The left column is the viewer's team only when they're playing.
+            // Spectating a playoff matchup puts the high seed here instead.
+            isMe={viewUserId === currentUserId}
             isWinner={iAmWinner}
             isFinal={isFinal}
             isRevealed={isScoring}

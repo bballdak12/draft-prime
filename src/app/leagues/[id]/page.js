@@ -615,6 +615,9 @@ export default function LeaguePage() {
           <NavTile icon="🎴" label="Weekly Pack" badge={hasAvailablePack ? 1 : 0} onClick={() => router.push(`/leagues/${id}/pack`)} />
           <NavTile icon="🏈" label="Edit Helmet" onClick={() => router.push(`/leagues/${id}/helmet`)} />
           <NavTile icon="🎖️" label="My Profile" onClick={() => router.push('/profile')} />
+          {season?.current_week >= 15 && (
+            <NavTile icon="🥇" label="Playoffs" onClick={() => router.push(`/leagues/${id}/playoffs`)} />
+          )}
           {isCommissioner && (
             <NavTile icon="🛠️" label="Commish" onClick={() => router.push(`/leagues/${id}/commissioner`)} />
           )}
